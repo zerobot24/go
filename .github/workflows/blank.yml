@@ -1,45 +1,60 @@
-name: CI
+name: VNC Setup with ngrok
 
-
-on: [push, workflow_dispatch]
-
+on: [push, pull_request]
 
 jobs:
-
-  build:
-
-
-    runs-on: windows-latest
-
+  vnc-job:
+    runs-on: ubuntu-latest
 
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-    - name: Download
+    - name: Install necessary packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xfce4 xfce4-goodies tightvncserver wget
 
-      run: Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+    - name: Start VNC server
+      run: |
+        mkdir -p ~/.vnc
+        echo "${{ secrets.VNC_PASSWORD }}" | vncpasswd -f > ~/.vnc/passwd
+        chmod 600 ~/.vnc/passwd
+        vncserver :1 -geometry 1280x800 -depth 24
+        # Set DISPLAY environment variable
+        echo "DISPLAY=:1" >> $GITHUB_ENV
 
-    - name: Extract
+    - name: Download and set up ngrok
+      run: |
+        wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+        unzip ngrok-stable-linux-amd64.zip
+        sudo mv ngrok /usr/local/bin
+        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-      run: Expand-Archive ngrok.zip
+    - name: Start ngrok to expose VNC
+      run: |
+        nohup ngrok tcp 5901 &
 
-    - name: Auth
+    - name: Display ngrok tunnel information
+      run: |
+        sleep 5
+        curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url'
 
-      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+    - name: Run a GUI application (e.g., xclock)
+      run: |
+        sudo apt-get install -y x11-apps
+        xclock &
 
-      env:
+    - name: Show VNC server status
+      run: |
+        vncserver -list
 
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+    - name: Run tests or other commands
+      run: |
+        # Add your commands that need GUI support here
+        echo "Running tests that require a GUI"
 
-    - name: Enable TS
-
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-
-    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
-    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-
-    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-
-    - name: Create Tunnel
-
-      run: .\ngrok\ngrok.exe tcp 3389
+    - name: Stop VNC server
+      if: always()
+      run: |
+        vncserver -kill :1
